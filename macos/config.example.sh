@@ -5,8 +5,8 @@
 ACC="你的校园网账号"
 PASS="你的校园网密码"
 
-# 只对这个 SSID 的 Wi-Fi 生效(有线不受限); 默认 hfut-wlan
-WIFI_SSID_REQUIRED="hfut-wlan"
+# 只对这些 SSID 的 Wi-Fi 生效(逗号分隔, 有线不受限); 用路由器共享校园网时把路由器 AP 名加进来
+WIFI_SSIDS="hfut-wlan"
 
 # portal 候选(空格分隔; 真 portal 以劫持页跳转为准, 候选仅兜底)
 PORTAL_CANDIDATES="172.18.3.3 172.18.2.2"

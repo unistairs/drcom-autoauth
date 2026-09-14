@@ -6,8 +6,8 @@
     Acc  = "你的校园网账号"
     Pass = "你的校园网密码"
 
-    # 只对这个 SSID 的 Wi-Fi 生效(有线不受限)
-    WifiSsidRequired = "hfut-wlan"
+    # 只对这些 SSID 的 Wi-Fi 生效(数组, 有线不受限); 用路由器共享校园网时把路由器 AP 名加进来
+    WifiSsids = @("hfut-wlan")
 
     # portal 候选(真 portal 以劫持页跳转为准, 候选仅兜底)
     PortalCandidates = @("172.18.3.3", "172.18.2.2")

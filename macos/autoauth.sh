@@ -15,7 +15,9 @@ fi
 # shellcheck source=/dev/null
 . "$CONF"
 : "${ACC:?config.sh 里缺少 ACC(账号)}" "${PASS:?config.sh 里缺少 PASS(密码)}"
-WIFI_SSID_REQUIRED="${WIFI_SSID_REQUIRED:-hfut-wlan}"
+# 逗号分隔的 SSID 白名单(兼容旧版单值 WIFI_SSID_REQUIRED);
+# 用路由器/热点共享校园网时, 把路由器的 AP 名也加进来, 如 "hfut-wlan,宿舍路由"
+WIFI_SSIDS="${WIFI_SSIDS:-${WIFI_SSID_REQUIRED:-hfut-wlan}}"
 PORTAL_CANDIDATES="${PORTAL_CANDIDATES:-172.18.3.3 172.18.2.2}"
 CANARY="${CANARY:-http://connect.rom.miui.com/generate_204}"
 
@@ -32,7 +34,14 @@ active_legs() {
     [ -z "$ip" ] && continue
     if [ "$if" = "$wif" ]; then
       ssid=$(networksetup -getairportnetwork "$if" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
-      [ "$ssid" != "$WIFI_SSID_REQUIRED" ] && continue
+      # 逗号分隔白名单匹配(支持含空格的 SSID)
+      _allowed=1; _oldifs=$IFS; IFS=','
+      for _w in $WIFI_SSIDS; do
+        _w=$(echo "$_w" | sed 's/^ *//;s/ *$//')
+        [ "$ssid" = "$_w" ] && { _allowed=0; break; }
+      done
+      IFS=$_oldifs
+      [ $_allowed -ne 0 ] && continue
     fi
     echo "$if $ip"
   done

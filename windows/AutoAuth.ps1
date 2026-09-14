@@ -17,7 +17,11 @@ if (-not (Test-Path $ConfPath)) {
 }
 $Conf = Import-PowerShellDataFile $ConfPath
 if (-not $Conf.Acc -or -not $Conf.Pass) { Log "config.psd1 缺少 Acc/Pass"; exit 1 }
-$WifiSsidRequired = if ($Conf.WifiSsidRequired) { $Conf.WifiSsidRequired } else { "hfut-wlan" }
+# 支持 WifiSsids 数组白名单(用路由器共享校园网时, 把路由器 AP 名也加进来); 兼容旧的单值 WifiSsidRequired
+$WifiSsids = @()
+if ($Conf.WifiSsids) { $WifiSsids = @($Conf.WifiSsids) }
+elseif ($Conf.WifiSsidRequired) { $WifiSsids = @($Conf.WifiSsidRequired) }
+else { $WifiSsids = @("hfut-wlan") }
 $PortalCandidates = if ($Conf.PortalCandidates) { $Conf.PortalCandidates } else { @("172.18.3.3", "172.18.2.2") }
 $Canary = if ($Conf.Canary) { $Conf.Canary } else { "http://connect.rom.miui.com/generate_204" }
 $SchoolName = if ($Conf.PortalSchoolName) { $Conf.PortalSchoolName } else { "合肥工业大学" }
@@ -39,7 +43,7 @@ function Get-ActiveLegs {
     ForEach-Object {
       $alias = $_.InterfaceAlias
       $isWifi = $alias -match "(?i)wi-?fi|wlan|无线"
-      if ($isWifi -and $wifiSsid -ne $WifiSsidRequired) { return }
+      if ($isWifi -and ($WifiSsids -notcontains $wifiSsid)) { return }
       [PSCustomObject]@{ Alias = $alias; IP = $_.IPAddress }
     }
 }
