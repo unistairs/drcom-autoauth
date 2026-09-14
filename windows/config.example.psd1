@@ -1,4 +1,4 @@
-@{
+﻿@{
     # autoauth 配置文件 —— 复制本文件为 config.psd1 并填入真实值
     # config.psd1 已在 .gitignore 中, 永远不会被提交
 

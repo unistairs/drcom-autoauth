@@ -1,4 +1,4 @@
-# 注册 autoauth 为登录自启计划任务(脚本内部 20 秒循环)
+﻿# 注册 autoauth 为登录自启计划任务(脚本内部 20 秒循环)
 # 用法: 右键用 PowerShell 运行, 或在 PowerShell 中执行本脚本
 $ErrorActionPreference = "Stop"
 $scriptPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AutoAuth.ps1"

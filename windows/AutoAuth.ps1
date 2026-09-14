@@ -1,4 +1,4 @@
-# Dr.COM 校园网 portal 自动认证看门狗 (Windows / PowerShell 5.1+)
+﻿# Dr.COM 校园网 portal 自动认证看门狗 (Windows / PowerShell 5.1+)
 # 与 macOS 版逻辑一致: 逐链路 captive 检测 -> 顺劫持跳转找真 portal ->
 #   四重指纹校验防钓鱼 -> ps/pid/calg -> MD5/base64 编码 -> POST 登录 -> msga 判定 -> 验证
 # 依赖: Windows 10 1803+ 自带 curl.exe, PowerShell 5.1+。无需管理员(用户级计划任务即可)。
