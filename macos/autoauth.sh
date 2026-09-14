@@ -15,8 +15,12 @@ fi
 # shellcheck source=/dev/null
 . "$CONF"
 : "${ACC:?config.sh 里缺少 ACC(账号)}"
+# 密码优先从系统钥匙串读(服务 drcom-campus-portal, 账号=ACC); 兼容旧配置里的 PASS/PASS_HASH
 if [ -z "${PASS:-}" ] && [ -z "${PASS_HASH:-}" ]; then
-  echo "$(date '+%m-%d %H:%M:%S') config.sh 里缺少 PASS(明文) 或 PASS_HASH(哈希, 推荐)" >> "$LOG" 2>/dev/null
+  PASS=$(security find-generic-password -w -s "drcom-campus-portal" -a "$ACC" 2>/dev/null || true)
+fi
+if [ -z "${PASS:-}" ] && [ -z "${PASS_HASH:-}" ]; then
+  echo "$(date '+%m-%d %H:%M:%S') 找不到密码: 钥匙串(服务 drcom-campus-portal)和 config 里都没有, 请运行 setup.sh" >> "$LOG" 2>/dev/null
   exit 1
 fi
 # 逗号分隔的 SSID 白名单(兼容旧版单值 WIFI_SSID_REQUIRED);

@@ -16,7 +16,7 @@
 - **宵禁退避**：识别"本时段禁止使用"（夜间禁网）后退避 30 分钟，不通宵轰炸 portal，解禁自动恢复
 - **SSID 白名单门控**：只对名单内的校园 Wi-Fi 生效（支持逗号分隔多个 SSID，用路由器共享校园网时把路由器 AP 名也加进来）；连其他 Wi-Fi 完全静默；有线不受限
 - **零依赖**：macOS 仅需自带的 bash/curl；Windows 仅需 Win10 自带的 PowerShell + curl.exe
-- **凭据不落地**：setup 脚本交互配置，密码只存 MD5 派生哈希（Dr.COM 上传的就是哈希+公开常量，见 docs/protocol.md），不落明文；配置文件已 gitignore
+- **凭据进系统保险箱**：setup 交互配置后密码存入 **macOS 钥匙串 / Windows DPAPI**（用户级加密，仅本机本用户可读），磁盘无明文无自研哈希，不触发杀软启发式
 
 ## 安装
 
@@ -24,7 +24,7 @@
 
 ```bash
 cd macos
-bash setup.sh    # 交互式配置(密码存哈希)
+bash setup.sh    # 交互式配置(密码入钥匙串)
 bash start.sh    # 试跑一轮+看日志
 bash install.sh  # 常驻(登录自启)
 ```
@@ -35,7 +35,7 @@ bash install.sh  # 常驻(登录自启)
 
 ```powershell
 cd windows
-.\Setup.ps1                 # 交互式配置(密码存哈希)
+.\Setup.ps1                 # 交互式配置(密码 DPAPI 加密)
 .\Start.ps1                 # 试跑一轮+看日志
 .\Register-AutoAuthTask.ps1   # 常驻(登录自启)
 ```

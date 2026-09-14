@@ -5,6 +5,7 @@
 param([switch]$Once)   # -Once: 只跑一轮(手动调试); 默认 20 秒循环常驻
 
 $ErrorActionPreference = "Continue"
+Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
 $Base = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogFile = Join-Path $Base "autoauth.log"
 $ConfPath = Join-Path $Base "config.psd1"
@@ -16,7 +17,16 @@ if (-not (Test-Path $ConfPath)) {
   exit 1
 }
 $Conf = Import-PowerShellDataFile $ConfPath
-if (-not $Conf.Acc -or (-not $Conf.Pass -and -not $Conf.PassHash)) { Log "config.psd1 缺少 Acc 或 Pass/PassHash"; exit 1 }
+if (-not $Conf.Acc -or (-not $Conf.Pass -and -not $Conf.PassHash -and -not $Conf.PassProtected)) { Log "config.psd1 缺少 Acc 或 Pass/PassHash/PassProtected"; exit 1 }
+# 密码来源优先级: 明文 Pass > DPAPI PassProtected > PassHash
+if (-not $Conf.Pass -and $Conf.PassProtected) {
+  try {
+    $Conf.Pass = [System.Text.Encoding]::UTF8.GetString(
+      [System.Security.Cryptography.ProtectedData]::Unprotect(
+        [Convert]::FromBase64String($Conf.PassProtected), $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
+  } catch { Log "PassProtected 解密失败(非本机本用户生成?): $($_.Exception.Message)"; exit 1 }
+}
 # 支持 WifiSsids 数组白名单(用路由器共享校园网时, 把路由器 AP 名也加进来); 兼容旧的单值 WifiSsidRequired
 $WifiSsids = @()
 if ($Conf.WifiSsids) { $WifiSsids = @($Conf.WifiSsids) }
