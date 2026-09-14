@@ -26,6 +26,7 @@ $PortalCandidates = if ($Conf.PortalCandidates) { $Conf.PortalCandidates } else 
 $Canary = if ($Conf.Canary) { $Conf.Canary } else { "http://connect.rom.miui.com/generate_204" }
 $SchoolName = if ($Conf.PortalSchoolName) { $Conf.PortalSchoolName } else { "合肥工业大学" }
 $PortalIdPrefix = if ($Conf.PortalIdPrefix) { $Conf.PortalIdPrefix } else { "AH" }
+$PortalCheck = if ($Conf.PortalCheck) { $Conf.PortalCheck } else { "normal" }
 
 function Decode-GB2312([string]$path) {
   if (-not (Test-Path $path)) { return "" }
@@ -62,15 +63,25 @@ function Extract-PortalIp([string]$bodyFile) {
 }
 
 # portal 身份四重指纹校验(全部通过才交凭据)
+# portal 身份指纹校验: 前 3 重防钓鱼(系统标记/校名/机构编号), 第 4 重 ss5 会话绑定
+# 在 NAT/路由器后永远失配(portal 看到的是路由器 IP), 默认 normal 模式只要求 ss5 存在且是 IP;
+# strict 模式(config 里 PortalCheck="strict")要求 ss5 等于本机该链路 IP。
+# 失败原因写入 $script:PortalDenyReason 供日志记录。
 function Test-PortalIdentity([string]$srcIp, [string]$portal) {
+  $script:PortalDenyReason = ""
   $tmp = Join-Path $env:TEMP "drcom_page_$portal.html"
   & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 3 --max-time 6 "http://$portal/" -o $tmp 2>$null | Out-Null
   $page = Decode-GB2312 $tmp
-  if ($page -notmatch "DrCOMWebLoginID") { return $false }
-  if ($page -match "DrCOMWebLoginID_3|已经成功登录") { return $true }   # 已在线页同样是真 portal 指纹
-  if ($page -notmatch "portalname='$([regex]::Escape($SchoolName))") { return $false }
-  if ($page -notmatch "portalid='$([regex]::Escape($PortalIdPrefix))\d+") { return $false }
-  if ($page -notmatch "ss5='$([regex]::Escape($srcIp))'") { return $false }
+  if ([string]::IsNullOrEmpty($page)) { $script:PortalDenyReason = "无法访问/无响应"; return $false }
+  if ($page -notmatch [regex]::Escape("Dr.COMWebLoginID")) { $script:PortalDenyReason = "非 Dr.COM 页面(无系统标记)"; return $false }
+  if ($page -match "Dr\.COMWebLoginID_3|已经成功登录") { return $true }   # 已在线页同样是真 portal 指纹
+  if ($page -notmatch "portalname='$([regex]::Escape($SchoolName))") { $script:PortalDenyReason = "校名不匹配(需 $SchoolName)"; return $false }
+  if ($page -notmatch "portalid='$([regex]::Escape($PortalIdPrefix))\d+") { $script:PortalDenyReason = "portalid 不匹配(需 $PortalIdPrefix 开头)"; return $false }
+  if ($Conf.PortalCheck -eq "strict") {
+    if ($page -notmatch "ss5='$([regex]::Escape($srcIp))'") { $script:PortalDenyReason = "ss5 会话绑定不符(strict 要求等于本机 IP)"; return $false }
+  } else {
+    if ($page -notmatch "ss5='\d+\.\d+\.\d+\.\d+'") { $script:PortalDenyReason = "缺少 ss5 会话字段"; return $false }
+  }
   return $true
 }
 
@@ -138,7 +149,7 @@ function Run-Pass {
       if ([string]::IsNullOrEmpty($c)) { continue }
       if ($c -eq $hint -and -not (Test-HintIp $c)) { Log "[$if/$ip] 劫持跳转到非校园地址 $c, 可疑, 跳过"; continue }
       if (Test-PortalIdentity $ip $c) { $portal = $c; break }
-      Log "[$if/$ip] $c 身份校验未通过, 拒交凭据"
+      Log "[$if/$ip] $c 身份校验未通过($($script:PortalDenyReason)), 拒交凭据"
     }
     if (-not $portal) { Log "[$if/$ip] 未找到可信 portal (hint=$hint), 放弃本轮"; continue }
     if (Curfew-Active) { continue }

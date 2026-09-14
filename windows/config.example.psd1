@@ -18,4 +18,8 @@
     # portal 身份校验指纹(按学校实际情况调整)
     PortalSchoolName = "合肥工业大学"
     PortalIdPrefix   = "AH"
+
+    # 校验严格度: normal=前3重指纹+ss5存在即可(兼容路由器/NAT)
+    #             strict=追加要求 ss5 等于本机 IP(仅直连校园网时适用)
+    PortalCheck = "normal"
 }

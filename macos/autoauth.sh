@@ -63,14 +63,22 @@ extract_portal_ip() { # $1=页面文件
 
 # portal 身份四重指纹校验(全部通过才交凭据):
 #  1) Dr.COM 系统标记 2) 校名指纹 3) AH 机构编号 4) ss5 必须等于本机该链路 IP(会话绑定)
+# portal 身份指纹校验: 前 3 重是防钓鱼牙齿(系统/校名/机构编号), 第 4 重 ss5 会话绑定
+# 在 NAT/路由器后永远失配(portal 看到的是路由器 IP), 故默认 normal 模式只要求 ss5 存在且是 IP;
+# 需要最强校验可设 PORTAL_CHECK=strict(要求 ss5 等于本机该链路 IP)。失败原因输出到 stdout 供日志记录。
 verify_portal() { # $1=源IP $2=portalIP
   local page
   page=$(curl --noproxy '' -sS --interface "$1" --connect-timeout 3 --max-time 6 "http://$2/" 2>/dev/null | iconv -f GB2312 -t UTF-8 2>/dev/null)
-  echo "$page" | grep -q "Dr.COMWebLoginID" || return 1
+  [ -z "$page" ] && { echo "无法访问/无响应"; return 1; }
+  echo "$page" | grep -q "Dr.COMWebLoginID" || { echo "非 Dr.COM 页面(无系统标记)"; return 1; }
   echo "$page" | grep -q -E "Dr.COMWebLoginID_3|已经成功登录" && return 0   # 已在线状态页同样是真 portal 指纹
-  echo "$page" | grep -q "portalname='${PORTAL_SCHOOL_NAME:-合肥工业大学}" || return 1
-  echo "$page" | grep -qE "portalid='${PORTAL_ID_PREFIX:-AH}[0-9]+" || return 1
-  echo "$page" | grep -q "ss5='$1'" || return 1
+  echo "$page" | grep -q "portalname='${PORTAL_SCHOOL_NAME:-合肥工业大学}" || { echo "校名不匹配(需 ${PORTAL_SCHOOL_NAME:-合肥工业大学})"; return 1; }
+  echo "$page" | grep -qE "portalid='${PORTAL_ID_PREFIX:-AH}[0-9]+" || { echo "portalid 不匹配(需 ${PORTAL_ID_PREFIX:-AH} 开头)"; return 1; }
+  if [ "${PORTAL_CHECK:-normal}" = "strict" ]; then
+    echo "$page" | grep -q "ss5='$1'" || { echo "ss5 会话绑定不符(strict 模式要求等于本机 IP)"; return 1; }
+  else
+    echo "$page" | grep -qE "ss5='[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'" || { echo "缺少 ss5 会话字段"; return 1; }
+  fi
   return 0
 }
 
@@ -135,8 +143,8 @@ active_legs | while read -r if ip; do
           log "[$if/$ip] 劫持跳转到非校园地址 $c, 可疑, 跳过"
           continue
         fi
-        if verify_portal "$ip" "$c"; then portal=$c; break; fi
-        log "[$if/$ip] $c 身份校验未通过, 拒交凭据"
+        _why=$(verify_portal "$ip" "$c") && { portal=$c; break; }
+        log "[$if/$ip] $c 身份校验未通过($_why), 拒交凭据"
       done
       if [ -z "$portal" ]; then log "[$if/$ip] 未找到可信 portal (hint=$hint), 放弃本轮"; continue; fi
       if curfew_active; then continue; fi

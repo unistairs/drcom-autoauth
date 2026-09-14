@@ -17,3 +17,7 @@ CANARY="http://connect.rom.miui.com/generate_204"
 # portal 身份校验指纹(按学校实际情况调整)
 PORTAL_SCHOOL_NAME="合肥工业大学"
 PORTAL_ID_PREFIX="AH"
+
+# 校验严格度: normal=前3重指纹(系统/校名/机构编号)+ss5存在即可(兼容路由器/NAT)
+#             strict=追加要求 ss5 必须等于本机 IP(仅直连校园网时适用)
+PORTAL_CHECK="normal"
