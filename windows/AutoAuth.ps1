@@ -16,7 +16,7 @@ if (-not (Test-Path $ConfPath)) {
   exit 1
 }
 $Conf = Import-PowerShellDataFile $ConfPath
-if (-not $Conf.Acc -or -not $Conf.Pass) { Log "config.psd1 缺少 Acc/Pass"; exit 1 }
+if (-not $Conf.Acc -or (-not $Conf.Pass -and -not $Conf.PassHash)) { Log "config.psd1 缺少 Acc 或 Pass/PassHash"; exit 1 }
 # 支持 WifiSsids 数组白名单(用路由器共享校园网时, 把路由器 AP 名也加进来); 兼容旧的单值 WifiSsidRequired
 $WifiSsids = @()
 if ($Conf.WifiSsids) { $WifiSsids = @($Conf.WifiSsids) }
@@ -91,9 +91,20 @@ function Invoke-Login([string]$srcIp, [string]$portal) {
   if ($jsRaw -match "calg='([^']*)'") { $calg = $Matches[1] }
   if ($jsRaw -match "ps=(\d)") { $ps = $Matches[1] }
   if ($ps -eq "0") {
-    $upass = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Conf.Pass)); $r2 = "0"
+    # base64 模式必须明文
+    if ($Conf.Pass) {
+      $upass = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Conf.Pass)); $r2 = "0"
+    } else { Log "该 portal 为 base64(ps=0)模式, 哈希不可用, 请在 config 里改用明文 Pass"; return 1 }
   } else {
-    $upass = (Get-Md5Hex("$pid_v$($Conf.Pass)$calg")) + $calg + $pid_v; $r2 = "1"
+    if ($Conf.PassHash) {
+      # 哈希直接复用: upass = MD5(pid+密码+calg)+calg+pid, 常量不匹配则哈希无效
+      if ($pid_v -ne "2" -or $calg -ne "12345678") {
+        Log "portal 参数(pid=$pid_v,calg=$calg)与存储哈希不匹配, 请用 Setup 重新配置或改明文 Pass"; return 1
+      }
+      $upass = $Conf.PassHash + $calg + $pid_v; $r2 = "1"
+    } else {
+      $upass = (Get-Md5Hex("$pid_v$($Conf.Pass)$calg")) + $calg + $pid_v; $r2 = "1"
+    }
   }
   $respFile = Join-Path $env:TEMP "drcom_login_resp.html"
   & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 5 --max-time 12 -X POST "http://$portal/0.htm" `

@@ -14,7 +14,11 @@ if [ ! -f "$CONF" ]; then
 fi
 # shellcheck source=/dev/null
 . "$CONF"
-: "${ACC:?config.sh 里缺少 ACC(账号)}" "${PASS:?config.sh 里缺少 PASS(密码)}"
+: "${ACC:?config.sh 里缺少 ACC(账号)}"
+if [ -z "${PASS:-}" ] && [ -z "${PASS_HASH:-}" ]; then
+  echo "$(date '+%m-%d %H:%M:%S') config.sh 里缺少 PASS(明文) 或 PASS_HASH(哈希, 推荐)" >> "$LOG" 2>/dev/null
+  exit 1
+fi
 # 逗号分隔的 SSID 白名单(兼容旧版单值 WIFI_SSID_REQUIRED);
 # 用路由器/热点共享校园网时, 把路由器的 AP 名也加进来, 如 "hfut-wlan,宿舍路由"
 WIFI_SSIDS="${WIFI_SSIDS:-${WIFI_SSID_REQUIRED:-hfut-wlan}}"
@@ -81,9 +85,19 @@ do_login() { # $1=源IP $2=portal; 0=成功 1=失败 2=失败且 LOGIN_MSG 有�
   calg=$(echo "$js" | sed -n "s/.*calg='\([^']*\)'.*/\1/p"); calg=${calg:-12345678}
   ps=$(echo "$js" | sed -n 's/.*ps=\([0-9]\).*/\1/p'); ps=${ps:-1}
   if [ "$ps" = "0" ]; then
-    upass=$(printf '%s' "$PASS" | base64); r2=0
+    # base64 模式必须明文
+    if [ -n "${PASS:-}" ]; then upass=$(printf '%s' "$PASS" | base64); r2=0
+    else log "该 portal 为 base64(ps=0)模式, 哈希不可用, 请在 config 里改用明文 PASS"; return 1; fi
   else
-    upass="$(md5 -q -s "${pid}${PASS}${calg}")${calg}${pid}"; r2=1
+    if [ -n "${PASS_HASH:-}" ]; then
+      # 哈希直接复用: upass = MD5(pid+密码+calg)+calg+pid, 常量不匹配则哈希无效
+      if [ "$pid" != "2" ] || [ "$calg" != "12345678" ]; then
+        log "portal 参数(pid=$pid,calg=$calg)与存储哈希不匹配, 请用 setup 重新配置或改明文 PASS"; return 1
+      fi
+      upass="${PASS_HASH}${calg}${pid}"; r2=1
+    else
+      upass="$(md5 -q -s "${pid}${PASS}${calg}")${calg}${pid}"; r2=1
+    fi
   fi
   resp=$(curl --noproxy '' -sS --interface "$src" --connect-timeout 5 --max-time 12 -X POST "http://$portal/0.htm" \
     --data-urlencode "DDDDD=$ACC" --data-urlencode "upass=$upass" \
