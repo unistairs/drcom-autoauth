@@ -2,9 +2,9 @@
     # autoauth 配置文件 —— 复制本文件为 config.psd1 并填入真实值
     # config.psd1 已在 .gitignore 中, 永远不会被提交
 
-    # 校园网账号(必填); 密码推荐用 Setup.ps1 生成( DPAPI 加密, 仅本机本用户可解 )
+    # 校园网账号(必填)
+    # 密码不用写在这里: 运行 .\Setup.ps1 时会提示输入, 并用 DPAPI 加密存储(仅本机本用户可解)
     Acc  = "你的校园网账号"
-    PassProtected = "运行 Setup.ps1 自动生成; 或直接用明文 Pass = "密码""
 
     # 只对这些 SSID 的 Wi-Fi 生效(数组, 有线不受限); 用路由器共享校园网时把路由器 AP 名加进来
     WifiSsids = @("hfut-wlan")
