@@ -59,9 +59,53 @@ function Get-ActiveLegs {
     }
 }
 
+# 绑定本机源地址发 UDP DNS 查询(绕过 TUN 的 53 劫持 / fake-ip), 返回第一个 A 记录
+function Resolve-LegDns([string]$name, [string]$srcIp) {
+  $udp = $null
+  try {
+    $udp = New-Object System.Net.Sockets.UdpClient
+    $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($srcIp), 0)))
+    $tid = Get-Random -Maximum 65535
+    $q = New-Object System.Collections.Generic.List[byte]
+    $q.Add([byte]($tid -shr 8)); $q.Add([byte]($tid -band 255))
+    $q.AddRange([byte[]](1,0, 0,1, 0,0, 0,0, 0,0))
+    foreach ($part in $name.Split('.')) {
+      $q.Add([byte]$part.Length)
+      $q.AddRange([Text.Encoding]::ASCII.GetBytes($part))
+    }
+    $q.AddRange([byte[]](0, 0,1, 0,1))
+    $bytes = $q.ToArray()
+    [void]$udp.Send($bytes, $bytes.Length, "223.5.5.5", 53)
+    $udp.Client.ReceiveTimeout = 4000
+    $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+    $resp = $udp.Receive([ref]$ep)
+    if ($resp.Length -lt 16) { return $null }
+    $pos = 12
+    while ($pos -lt $resp.Length -and $resp[$pos] -ne 0) { $pos += $resp[$pos] + 1 }
+    $pos += 5
+    while ($pos + 12 -le $resp.Length) {
+      if (($resp[$pos] -band 0xC0) -eq 0xC0) { $pos += 2 }
+      else { while ($pos -lt $resp.Length -and $resp[$pos] -ne 0) { $pos += $resp[$pos] + 1 }; $pos += 1 }
+      $type = ($resp[$pos] -shl 8) -bor $resp[$pos+1]
+      $rdlen = ($resp[$pos+8] -shl 8) -bor $resp[$pos+9]
+      $pos += 10
+      if ($type -eq 1 -and $rdlen -eq 4 -and $pos + 4 -le $resp.Length) {
+        return "$($resp[$pos]).$($resp[$pos+1]).$($resp[$pos+2]).$($resp[$pos+3])"
+      }
+      $pos += $rdlen
+    }
+    return $null
+  } catch { return $null }
+  finally { if ($udp) { $udp.Close() } }
+}
+
+# captive 检测: 先经链路本地 DNS 解析出真实 IP(TUN+fake-ip 下系统解析会返回 fake-ip 导致误报), 再 --resolve 探测
 function Captive-Check([string]$srcIp, [string]$outFile) {
+  $hostn = ([uri]$Canary).Host
+  $realIp = Resolve-LegDns $hostn $srcIp
+  if (-not $realIp) { return "000" }
   $code = & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 4 --max-time 8 `
-    $Canary -o $outFile -w '%{http_code}' 2>$null
+    --resolve "$($hostn):80:$realIp" $Canary -o $outFile -w '%{http_code}' 2>$null
   return ($code -replace '\D','')
 }
 

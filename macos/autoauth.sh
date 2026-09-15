@@ -56,8 +56,15 @@ active_legs() {
 }
 
 # captive 检测: 输出 HTTP 码, 页面存 $2
+# TUN+fake-ip 下域名解析会返回 fake-ip(198.18.x)导致探测永远失败,
+# 先用绑定源地址的 UDP DNS 解析出真实 IP(绕过 TUN 的 53 劫持), 再 --resolve 固定 IP
 captive_check() { # $1=源IP $2=输出文件
+  local host realip
+  host=$(echo "$CANARY" | sed -E 's#https?://([^/]+).*#\1#')
+  realip=$(dig +short +time=2 +tries=1 -b "$1" "$host" @223.5.5.5 2>/dev/null | grep -E '^[0-9.]+$' | head -1)
+  [ -z "$realip" ] && { echo 000; return; }
   curl --noproxy '' -sS --interface "$1" --connect-timeout 4 --max-time 8 \
+    --resolve "$host:80:$realip" \
     "$CANARY" -o "$2" -w '%{http_code}' 2>/dev/null
 }
 
