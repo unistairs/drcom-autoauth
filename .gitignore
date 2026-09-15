@@ -6,3 +6,10 @@ config.psd1
 .captive.*
 .curfew_seen
 .DS_Store
+
+# Windows local diagnostics and backups
+*.bak
+windows/capture/
+windows/capture-location.txt
+windows/capture.stop
+windows/.canary-address.json

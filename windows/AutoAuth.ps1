@@ -10,7 +10,7 @@ $Base = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogFile = Join-Path $Base "autoauth.log"
 $ConfPath = Join-Path $Base "config.psd1"
 
-function Log([string]$m) { Add-Content -Path $LogFile -Value ("{0} {1}" -f (Get-Date -Format "MM-dd HH:mm:ss"), $m) }
+function Log([string]$m) { Add-Content -Encoding UTF8 -Path $LogFile -Value ("{0} {1}" -f (Get-Date -Format "MM-dd HH:mm:ss"), $m) }
 
 if (-not (Test-Path $ConfPath)) {
   Log "缺少 $ConfPath —— 请复制 config.example.psd1 为 config.psd1 并填入账号密码"
@@ -49,7 +49,10 @@ function Get-ActiveLegs {
   $wifiSsid = ""
   $netsh = netsh wlan show interfaces 2>$null | Select-String "^\s*SSID\s*:\s*(.+)$"
   if ($netsh) { $wifiSsid = $netsh.Matches[0].Groups[1].Value.Trim() }
+  $activeIndexes = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -eq 'Up' } | Select-Object -ExpandProperty InterfaceIndex)
   Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.InterfaceIndex -in $activeIndexes -and $_.AddressState -eq 'Preferred' } |
     Where-Object { $_.IPAddress -notmatch "^169\.254\." -and $_.IPAddress -ne "127.0.0.1" } |
     ForEach-Object {
       $alias = $_.InterfaceAlias
@@ -59,56 +62,56 @@ function Get-ActiveLegs {
     }
 }
 
-# 绑定本机源地址发 UDP DNS 查询(绕过 TUN 的 53 劫持 / fake-ip), 返回第一个 A 记录
-function Resolve-LegDns([string]$name, [string]$srcIp) {
-  $udp = $null
-  try {
-    $udp = New-Object System.Net.Sockets.UdpClient
-    $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($srcIp), 0)))
-    $tid = Get-Random -Maximum 65535
-    $q = New-Object System.Collections.Generic.List[byte]
-    $q.Add([byte]($tid -shr 8)); $q.Add([byte]($tid -band 255))
-    $q.AddRange([byte[]](1,0, 0,1, 0,0, 0,0, 0,0))
-    foreach ($part in $name.Split('.')) {
-      $q.Add([byte]$part.Length)
-      $q.AddRange([Text.Encoding]::ASCII.GetBytes($part))
-    }
-    $q.AddRange([byte[]](0, 0,1, 0,1))
-    $bytes = $q.ToArray()
-    [void]$udp.Send($bytes, $bytes.Length, "223.5.5.5", 53)
-    $udp.Client.ReceiveTimeout = 4000
-    $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
-    $resp = $udp.Receive([ref]$ep)
-    if ($resp.Length -lt 16) { return $null }
-    $pos = 12
-    while ($pos -lt $resp.Length -and $resp[$pos] -ne 0) { $pos += $resp[$pos] + 1 }
-    $pos += 5
-    while ($pos + 12 -le $resp.Length) {
-      if (($resp[$pos] -band 0xC0) -eq 0xC0) { $pos += 2 }
-      else { while ($pos -lt $resp.Length -and $resp[$pos] -ne 0) { $pos += $resp[$pos] + 1 }; $pos += 1 }
-      $type = ($resp[$pos] -shl 8) -bor $resp[$pos+1]
-      $rdlen = ($resp[$pos+8] -shl 8) -bor $resp[$pos+9]
-      $pos += 10
-      if ($type -eq 1 -and $rdlen -eq 4 -and $pos + 4 -le $resp.Length) {
-        return "$($resp[$pos]).$($resp[$pos+1]).$($resp[$pos+2]).$($resp[$pos+3])"
+# Fake-IP DNS (Mihomo/Clash) cannot be reached through a bound physical interface.
+# Resolve only the public canary over HTTPS; never send credentials to this service.
+$script:CanaryAddress = $null
+$script:CanaryRefresh = [datetime]::MinValue
+$CanaryCache = Join-Path $Base '.canary-address.json'
+function Get-CanaryResolveArgs {
+  $uri = [uri]$Canary
+  $answers = @(Resolve-DnsName $uri.DnsSafeHost -Type A -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress)
+  if (-not @($answers | Where-Object { $_ -match '^198\.(18|19)\.' }).Count) { return }
+  if ((Get-Date) -ge $script:CanaryRefresh) {
+    $script:CanaryRefresh = (Get-Date).AddMinutes(5)
+    try {
+      $json = & curl.exe --noproxy '*' -fsS --connect-timeout 4 --max-time 8 `
+        "https://dns.alidns.com/resolve?name=$([uri]::EscapeDataString($uri.DnsSafeHost))&type=A" 2>$null
+      if ($LASTEXITCODE -ne 0) { throw 'HTTPS DNS unavailable' }
+      $answer = @(($json -join "`n" | ConvertFrom-Json).Answer |
+        Where-Object { $_.type -eq 1 -and $_.data -match '^\d+\.\d+\.\d+\.\d+$' -and $_.data -notmatch '^198\.(18|19)\.' })
+      if (-not $answer.Count) { throw 'No real IPv4 answer' }
+      $script:CanaryAddress = $answer[0].data
+      @{ Hostname = $uri.DnsSafeHost; Address = $script:CanaryAddress } |
+        ConvertTo-Json | Set-Content -LiteralPath $CanaryCache -Encoding UTF8
+      Log "探测域名被解析为 Fake-IP，改用真实地址 $script:CanaryAddress (仅影响本脚本)"
+    } catch {
+      if (-not $script:CanaryAddress -and (Test-Path $CanaryCache)) {
+        try {
+          $cached = Get-Content -Raw $CanaryCache | ConvertFrom-Json
+          if ($cached.Hostname -eq $uri.DnsSafeHost -and $cached.Address -match '^\d+\.\d+\.\d+\.\d+$') {
+            $script:CanaryAddress = $cached.Address
+          }
+        } catch { }
       }
-      $pos += $rdlen
+      Log "Fake-IP 的 HTTPS DNS 解析失败；缓存地址=$script:CanaryAddress；无法探测不代表校园网断线"
     }
-    return $null
-  } catch { return $null }
-  finally { if ($udp) { $udp.Close() } }
+  }
+  if ($script:CanaryAddress) { '--resolve'; ('{0}:{1}:{2}' -f $uri.DnsSafeHost, $uri.Port, $script:CanaryAddress) }
 }
 
-# captive 检测: 先经链路本地 DNS 解析出真实 IP(TUN+fake-ip 下系统解析会返回 fake-ip 导致误报), 再 --resolve 探测
 function Captive-Check([string]$srcIp, [string]$outFile) {
-  $hostn = ([uri]$Canary).Host
-  $realIp = Resolve-LegDns $hostn $srcIp
-  if (-not $realIp) { return "000" }
-  $code = & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 4 --max-time 8 `
-    --resolve "$($hostn):80:$realIp" $Canary -o $outFile -w '%{http_code}' 2>$null
+  $resolveArgs = @(Get-CanaryResolveArgs)
+  Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
+  $errorFile = "$outFile.err"
+  $code = & curl.exe --noproxy '*' -sS --interface $srcIp --connect-timeout 4 --max-time 8 `
+    @resolveArgs $Canary -D "$outFile.headers" -o $outFile -w '%{http_code}' 2>$errorFile
+  if ($LASTEXITCODE -ne 0) {
+    Log "[$srcIp] 探测 curl 错误 $LASTEXITCODE : $((Get-Content $errorFile -ErrorAction SilentlyContinue) -join ' ')"
+    return '000'
+  }
   return ($code -replace '\D','')
 }
-
 function Extract-PortalIp([string]$bodyFile) {
   if (-not (Test-Path $bodyFile)) { return $null }
   $m = Select-String -Path $bodyFile -Pattern 'https?://(\d+\.\d+\.\d+\.\d+)' | Select-Object -First 1
@@ -123,18 +126,26 @@ function Extract-PortalIp([string]$bodyFile) {
 # 失败原因写入 $script:PortalDenyReason 供日志记录。
 function Test-PortalIdentity([string]$srcIp, [string]$portal) {
   $script:PortalDenyReason = ""
+  $script:PortalIsLoginPage = $false
   $tmp = Join-Path $env:TEMP "drcom_page_$portal.html"
-  & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 3 --max-time 6 "http://$portal/" -o $tmp 2>$null | Out-Null
+  & curl.exe --noproxy '*' -sS --interface $srcIp --connect-timeout 3 --max-time 6 "http://$portal/" -o $tmp 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { $script:PortalDenyReason = "curl 请求失败"; return $false }
   $page = Decode-GB2312 $tmp
   if ([string]::IsNullOrEmpty($page)) { $script:PortalDenyReason = "无法访问/无响应"; return $false }
   if ($page -notmatch [regex]::Escape("Dr.COMWebLoginID")) { $script:PortalDenyReason = "非 Dr.COM 页面(无系统标记)"; return $false }
-  if ($page -match "Dr\.COMWebLoginID_3|已经成功登录") { return $true }   # 已在线页同样是真 portal 指纹
+  $script:PortalIsLoginPage = $page -match '<!--\s*Dr\.COMWebLoginID_0(?:\.htm)?\s*-->'
+  # Do not bypass school/id/session checks for success-template references.
   if ($page -notmatch "portalname='$([regex]::Escape($SchoolName))") { $script:PortalDenyReason = "校名不匹配(需 $SchoolName)"; return $false }
   if ($page -notmatch "portalid='$([regex]::Escape($PortalIdPrefix))\d+") { $script:PortalDenyReason = "portalid 不匹配(需 $PortalIdPrefix 开头)"; return $false }
-  if ($Conf.PortalCheck -eq "strict") {
-    if ($page -notmatch "ss5='$([regex]::Escape($srcIp))'") { $script:PortalDenyReason = "ss5 会话绑定不符(strict 要求等于本机 IP)"; return $false }
-  } else {
-    if ($page -notmatch "ss5='\d+\.\d+\.\d+\.\d+'") { $script:PortalDenyReason = "缺少 ss5 会话字段"; return $false }
+  # Dr.COM can use single or double quotes and whitespace around assignments.
+  $session = [regex]::Match($page, '\bss5\s*=\s*(?<quote>[''"])(?<ip>\d{1,3}(?:\.\d{1,3}){3})\k<quote>')
+  if (-not $session.Success) { $script:PortalDenyReason = '缺少或无效的 ss5 会话字段'; return $false }
+  $sessionIp = $session.Groups['ip'].Value
+  if (@($sessionIp.Split('.') | Where-Object { [int]$_ -gt 255 }).Count) {
+    $script:PortalDenyReason = 'ss5 不是合法 IPv4 地址'; return $false
+  }
+  if ($Conf.PortalCheck -eq 'strict' -and $sessionIp -ne $srcIp) {
+    $script:PortalDenyReason = 'ss5 会话绑定不符(strict 要求等于本机 IP)'; return $false
   }
   return $true
 }
@@ -150,7 +161,9 @@ function Get-Md5Hex([string]$s) {
 $script:LoginMsg = ""
 function Invoke-Login([string]$srcIp, [string]$portal) {
   # 返回: 0=成功 1=失败 2=失败且 LoginMsg 有服务端原因
-  $jsRaw = & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 3 --max-time 6 "http://$portal/a41.js" 2>$null | Select-Object -First 1
+  $jsRaw = & curl.exe --noproxy '*' -sS --interface $srcIp --connect-timeout 3 --max-time 6 "http://$portal/a41.js" 2>$null
+  if ($LASTEXITCODE -ne 0) { Log "无法读取 portal 编码参数，停止本次登录"; return 1 }
+  $jsRaw = $jsRaw -join "`n"
   $pid_v = "2"; $calg = "12345678"; $ps = "1"
   if ($jsRaw -match "pid='([^']*)'") { $pid_v = $Matches[1] }
   if ($jsRaw -match "calg='([^']*)'") { $calg = $Matches[1] }
@@ -172,10 +185,11 @@ function Invoke-Login([string]$srcIp, [string]$portal) {
     }
   }
   $respFile = Join-Path $env:TEMP "drcom_login_resp.html"
-  & curl.exe --noproxy '' -sS --interface $srcIp --connect-timeout 5 --max-time 12 -X POST "http://$portal/0.htm" `
+  & curl.exe --noproxy '*' -sS --interface $srcIp --connect-timeout 5 --max-time 12 -X POST "http://$portal/0.htm" `
     --data-urlencode "DDDDD=$($Conf.Acc)" --data-urlencode "upass=$upass" `
     --data-urlencode "R1=0" --data-urlencode "R2=$r2" --data-urlencode "para=00" `
     --data-urlencode "0MKKey=123456" --data-urlencode "v6ip=" -o $respFile 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { Log "登录请求传输失败"; return 1 }
   $resp = Decode-GB2312 $respFile
   # 先解析服务端 msga(失败原因): 非空即失败, 页面模板里的"成功"字样不算数
   if ($resp -match "msga='([^']+)'") { $script:LoginMsg = $Matches[1]; return 2 }
@@ -190,31 +204,54 @@ function Curfew-Active {
 }
 
 function Run-Pass {
+  $script:PendingLegs = 0
+  $script:SlowRetry = $false
   foreach ($leg in Get-ActiveLegs) {
     $if = $leg.Alias; $ip = $leg.IP
     $page = Join-Path $env:TEMP "drcom_captive.html"
+    $portal = $null
+    if ($script:NetworkChanged -and $ip -match '^172\.(1[6-9]|2[0-9]|3[01])\.') {
+      foreach ($candidate in ($PortalCandidates | Select-Object -Unique)) {
+        if ((Test-PortalIdentity $ip $candidate) -and $script:PortalIsLoginPage) {
+          $portal = $candidate
+          Log "[$if/$ip] 网络变化，可信登录页已确认，立即认证"
+          break
+        }
+      }
+    }
+    if (-not $portal) {
     $code = Captive-Check $ip $page
-    if ($code -eq "204") { continue }
-    if ($code -eq "000" -or $code -eq "") { Log "[$if/$ip] 无响应(链路不通), 跳过"; continue }
-    Log "[$if/$ip] 检测到 portal 劫持 (HTTP $code), 开始认证"
+    if ($code -eq "204") { if ($Once) { Log "[$if/$ip] HTTP 204，链路已通，无需认证" }; continue }
+    $probeUnavailable = $code -eq '000' -or $code -eq ''
+    if ($probeUnavailable) { Log "[$if/$ip] 探测不可达，检查候选校园登录页；不能据此判断链路断开" }
+    if (-not $probeUnavailable) { Log "[$if/$ip] 检测到 portal 劫持 (HTTP $code), 开始认证" }
     $hint = Extract-PortalIp $page
     $portal = $null
-    foreach ($c in @($hint) + $PortalCandidates) {
+    foreach ($c in (@(@($hint) + $PortalCandidates) | Select-Object -Unique)) {
       if ([string]::IsNullOrEmpty($c)) { continue }
       if ($c -eq $hint -and -not (Test-HintIp $c)) { Log "[$if/$ip] 劫持跳转到非校园地址 $c, 可疑, 跳过"; continue }
-      if (Test-PortalIdentity $ip $c) { $portal = $c; break }
+      if (Test-PortalIdentity $ip $c) {
+        if ($probeUnavailable -and -not $script:PortalIsLoginPage) {
+          Log "[$if/$ip] $c 不是明确的未登录页面，探测超时情况下不提交凭据"
+          continue
+        }
+        $portal = $c; break
+      }
       Log "[$if/$ip] $c 身份校验未通过($($script:PortalDenyReason)), 拒交凭据"
     }
+    }
+    $script:PendingLegs++
     if (-not $portal) { Log "[$if/$ip] 未找到可信 portal (hint=$hint), 放弃本轮"; continue }
-    if (Curfew-Active) { continue }
+    if (Curfew-Active) { $script:SlowRetry = $true; continue }
     $rc = Invoke-Login $ip $portal
     if ($rc -eq 0) {
       Remove-Item $CurfewFile -ErrorAction SilentlyContinue
       Start-Sleep 2
       $v = Captive-Check $ip $page
-      if ($v -eq "204") { Log "[$if/$ip] 认证成功(portal=$portal), 链路已通" }
+      if ($v -eq "204") { $script:PendingLegs--; Log "[$if/$ip] 认证成功(portal=$portal), 链路已通" }
       else { Log "[$if/$ip] 登录响应成功但验证仍为 $v, 下轮重试(portal=$portal)" }
     } elseif ($rc -eq 2) {
+      $script:SlowRetry = $true
       if ($script:LoginMsg -match "时段|禁止") {
         Set-Content -Path $CurfewFile -Value (Get-Date).ToString()
         Log "[$if/$ip] 校园网宵禁时段($($script:LoginMsg)), 30 分钟后再试"
@@ -227,4 +264,59 @@ function Run-Pass {
   }
 }
 
-if ($Once) { Run-Pass } else { while ($true) { Run-Pass; Start-Sleep 20 } }
+function Get-RetryDelay([int]$failures) {
+  if ($script:SlowRetry) { return 60 }
+  if ($script:PendingLegs -eq 0) { return 60 }
+  if ($failures -le 6) { return 5 }
+  return 30
+}
+if ($Once) { $script:NetworkChanged = $true; Run-Pass } else {
+  # 防止重复点击或登录启动产生多个后台巡逻进程。
+  $mutex = [Threading.Mutex]::new($false, 'Local\DrComAutoAuth')
+  $owned = $false
+  try {
+    try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
+    if (-not $owned) { exit 0 }
+    # C# callbacks only signal a wait handle; PowerShell work stays on its own thread.
+    Add-Type -TypeDefinition @"
+using System;
+using System.Net.NetworkInformation;
+using System.Threading;
+public sealed class DrComNetworkWake : IDisposable {
+    private readonly AutoResetEvent changed = new AutoResetEvent(false);
+    public DrComNetworkWake() {
+        NetworkChange.NetworkAddressChanged += AddressChanged;
+        NetworkChange.NetworkAvailabilityChanged += AvailabilityChanged;
+    }
+    private void AddressChanged(object sender, EventArgs args) { changed.Set(); }
+    private void AvailabilityChanged(object sender, NetworkAvailabilityEventArgs args) { changed.Set(); }
+    public bool Wait(int milliseconds) { return changed.WaitOne(milliseconds); }
+    public void Dispose() {
+        NetworkChange.NetworkAddressChanged -= AddressChanged;
+        NetworkChange.NetworkAvailabilityChanged -= AvailabilityChanged;
+        // Do not dispose the handle while an already-dispatched callback may use it.
+    }
+}
+"@
+    $watcher = New-Object DrComNetworkWake
+    $script:NetworkChanged = $true
+    $failures = 0
+    Log '后台已启用网络变化唤醒；离线短重试，在线每 60 秒检查'
+    try {
+      while ($true) {
+        Run-Pass
+        if ($script:PendingLegs -eq 0) { $failures = 0 } else { $failures++ }
+        $delay = Get-RetryDelay $failures
+        $script:NetworkChanged = $watcher.Wait($delay * 1000)
+        if ($script:NetworkChanged) {
+          $failures = 0
+          # Coalesce address notifications while DHCP is settling.
+          Start-Sleep -Milliseconds 500
+        }
+      }
+    } finally { $watcher.Dispose() }
+  } finally {
+    if ($owned) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+  }
+}
