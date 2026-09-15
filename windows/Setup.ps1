@@ -1,50 +1,62 @@
-﻿# Setup.ps1 —— 交互式配置校园网账号(密码用 Windows DPAPI 加密存储, 仅本机本用户可解)
-$ErrorActionPreference = "Stop"
+﻿# 交互配置：回车保留已有凭据，SSID 只追加。
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
-$Base = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-Write-Host "=== Dr.COM 自动认证 · 账号配置 ==="
-$Acc = Read-Host "校园网账号"
-if (-not $Acc) { Write-Host "账号不能为空"; exit 1 }
-$Sec = Read-Host "校园网密码(输入不显示)" -AsSecureString
-$Bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
-$Plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($Bstr)
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Bstr)
-if (-not $Plain) { Write-Host "密码不能为空"; exit 1 }
-
-# DPAPI 加密(当前用户范围): 只有本机本用户能解密, 不含明文, 不触发杀软
-$enc = [System.Security.Cryptography.ProtectedData]::Protect(
-  [System.Text.Encoding]::UTF8.GetBytes($Plain), $null,
-  [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-$Protected = [Convert]::ToBase64String($enc)
-$Plain = $null
-
-$conf = @"
-@{
-    # 由 Setup.ps1 生成于 $(Get-Date -Format 'yyyy-MM-dd HH:mm')
-    # PassProtected = DPAPI(CurrentUser) 加密后的密码(base64); 只有本机本用户可解
-    # 不要把它拷到别的机器/用户下, 解不开(换机器重跑 Setup.ps1 即可)
-    Acc           = "$Acc"
-    PassProtected = "$Protected"
-
-    # 只对这些 SSID 的 Wi-Fi 生效(数组; 有线不受限; 路由器 AP 名可加进来)
-    WifiSsids = @("hfut-wlan")
-
-    # portal 候选(真 portal 以劫持页跳转为准, 候选仅兜底)
-    PortalCandidates = @("172.18.3.3", "172.18.2.2")
-
-    # captive 检测探针(期望 204)
-    Canary = "http://connect.rom.miui.com/generate_204"
-
-    # portal 身份校验指纹(按学校实际情况调整)
-    PortalSchoolName = "合肥工业大学"
-    PortalIdPrefix   = "AH"
-
-    # 校验严格度: normal=兼容路由器/NAT | strict=ss5 须等于本机 IP(仅直连)
-    PortalCheck = "normal"
+$path = Join-Path $PSScriptRoot 'config.psd1'
+function Quote-Data([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
+function Format-Data($value) {
+  if ($null -eq $value) { return '$null' }
+  if ($value -is [string]) { return (Quote-Data $value) }
+  if ($value -is [bool]) { if ($value) { return '$true' }; return '$false' }
+  if ($value -is [array]) { return '@(' + (($value | ForEach-Object { Format-Data $_ }) -join ', ') + ')' }
+  if ($value -is [int] -or $value -is [double]) { return $value.ToString([Globalization.CultureInfo]::InvariantCulture) }
+  throw '配置中存在不支持的数据类型，原文件未修改。'
 }
-"@
-Set-Content -Path (Join-Path $Base "config.psd1") -Value $conf -Encoding UTF8
-Write-Host ""
-Write-Host "配置完成: 密码已用 DPAPI 加密存储(绑定本机本用户), config.psd1 不含明文"
-Write-Host "下一步: .\Start.ps1 试跑一轮; 没问题后 .\Register-AutoAuthTask.ps1 常驻。"
+$conf = @{
+  WifiSsids=@('hfut-wlan'); PortalCandidates=@('172.18.3.3','172.18.2.2')
+  Canary='http://connect.rom.miui.com/generate_204'; PortalSchoolName='合肥工业大学'
+  PortalIdPrefix='AH'; PortalCheck='normal'
+}
+if (Test-Path $path) { $conf = Import-PowerShellDataFile -LiteralPath $path }
+Write-Host '=== 校园网配置：已有内容可直接回车保留 ==='
+$acc = Read-Host '校园网账号（已有账号时回车保留）'
+if ($acc) { $conf.Acc = $acc }
+if (-not $conf.Acc) { throw '首次配置必须输入账号，原配置未修改。' }
+$sec = Read-Host '校园网密码（输入不显示；已有密码时回车保留）' -AsSecureString
+if ($sec.Length -gt 0) {
+  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+  try {
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($plain)
+    $protected = [Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
+    $conf.PassProtected = [Convert]::ToBase64String($protected)
+    $conf.Remove('Pass'); $conf.Remove('PassHash')
+  } finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    if ($bytes) { [Array]::Clear($bytes,0,$bytes.Length) }
+    $plain = $null
+  }
+} elseif (-not $conf.Pass -and -not $conf.PassProtected -and -not $conf.PassHash) {
+  throw '首次配置必须输入密码，原配置未修改。'
+}
+$ssids = New-Object 'System.Collections.Generic.List[string]'
+foreach ($ssid in @('hfut-wlan') + @($conf.WifiSsids) + @($conf.WifiSsidRequired)) {
+  if ($ssid -and -not $ssids.Contains([string]$ssid)) { $ssids.Add([string]$ssid) }
+}
+Write-Host ('当前允许的 Wi-Fi：' + ($ssids -join '、'))
+Write-Host '每次输入一个完整 Wi-Fi 名称，按回车添加；可继续添加，空白回车结束。'
+while ($true) {
+  $ssid = Read-Host '追加 Wi-Fi 名称（回车保留并继续启动）'
+  if ([string]::IsNullOrEmpty($ssid)) { break }
+  if (-not $ssids.Contains($ssid)) { $ssids.Add($ssid); Write-Host '已加入列表。' }
+  else { Write-Host '已存在，无需重复添加。' }
+}
+$conf.WifiSsids = $ssids.ToArray()
+$lines = @('@{') + @($conf.Keys | Sort-Object | ForEach-Object { '    ' + (Quote-Data $_) + ' = ' + (Format-Data $conf[$_]) }) + @('}')
+$temp = $path + '.tmp.psd1'
+try {
+  [IO.File]::WriteAllLines($temp,$lines,[Text.UTF8Encoding]::new($true))
+  $null = Import-PowerShellDataFile -LiteralPath $temp
+  Move-Item -LiteralPath $temp -Destination $path -Force
+} finally { if (Test-Path $temp) { Remove-Item -LiteralPath $temp } }
+Write-Host '配置已保存：未重新输入的凭据保持不变，Wi-Fi 名单只追加。'
+Write-Host '接下来试跑并启动后台。'

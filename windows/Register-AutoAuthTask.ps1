@@ -11,6 +11,11 @@ $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 New-Item -Path $key -Force | Out-Null
 New-ItemProperty -Path $key -Name 'DrComAutoAuth' -Value $command -PropertyType String -Force | Out-Null
 if ((Get-ItemPropertyValue -Path $key -Name 'DrComAutoAuth') -ne $command) { throw '自启动项写入后校验失败。' }
+# 重新加载刚保存的配置；只停止本项目的后台进程。
+$target = '"' + $scriptPath + '"'
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+  Where-Object { $_.CommandLine -and $_.CommandLine.Contains($target) } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction Stop }
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 2
 if ($process.HasExited -and $process.ExitCode -ne 0) { throw '后台启动失败，请查看 autoauth.log。' }

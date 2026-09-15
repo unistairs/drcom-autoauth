@@ -2,9 +2,9 @@
 $exe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 try {
   Write-Host '========== 校园网自动认证：一键启动 ==========' -ForegroundColor Cyan
-  Write-Host '每次运行都会重新配置账号。请使用平时登录电脑的账户运行。'
+  Write-Host '已有账号密码可回车保留；Wi-Fi 名称只追加。请使用平时登录电脑的账户运行。'
   $steps = @(
-    @{ File='Setup.ps1'; Text='配置校园网账号和密码' },
+    @{ File='Setup.ps1'; Text='配置账号、密码和追加 Wi-Fi' },
     @{ File='Start.ps1'; Text='试跑一次认证并显示日志' },
     @{ File='Register-AutoAuthTask.ps1'; Text='设置登录自启动并启动后台认证' }
   )
