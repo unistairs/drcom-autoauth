@@ -18,7 +18,59 @@
 - **零依赖**：macOS 仅需自带的 bash/curl；Windows 仅需 Win10 自带的 PowerShell + curl.exe
 - **凭据进系统保险箱**：setup 交互配置后密码存入 **macOS 钥匙串 / Windows DPAPI**（用户级加密，仅本机本用户可读），磁盘无明文无自研哈希，不触发杀软启发式
 
-## 安装
+## 使用教程（Windows）
+
+### 1. 下载并解压
+
+打开 [最新版本下载页](https://github.com/unistairs/drcom-autoauth/releases/latest)，在 **Assets（附件）** 中下载 `drcom-autoauth-v1.0.0.zip`。右键选择“全部解压”，放到准备长期保留的目录。不要在 ZIP 压缩包内直接运行，也不要只复制 BAT 文件。
+
+### 2. 一键配置并启动
+
+1. 连接校园网有线网络或 `hfut-wlan` 无线网络。
+2. 双击根目录的 **Windows一键启动.bat**，使用平时登录电脑的 Windows 账户，无需管理员权限。
+3. 按中文提示输入校园网账号和密码；密码输入时不会显示。
+4. 程序依次执行“账号配置 → 试跑认证 → 注册并启动后台”。如果某一步报错，保留窗口中的错误信息。
+5. 出现设置完成提示后可以关闭窗口，后台会继续工作，下次登录 Windows 自动启动。
+
+**每次双击都会重新配置账号及默认设置。配置完成后，日常连接校园网无需再次双击。** 密码由 Windows DPAPI 加密，配置绑定本机当前用户；换电脑或换 Windows 用户时需重新配置。
+
+### 3. 确认是否联网成功
+
+用记事本打开 `windows/autoauth.log`：
+
+- `认证成功(...), 链路已通`：脚本登录后已经回验 HTTP 204。
+- `HTTP 204，链路已通，无需认证`：当前已经在线。
+- `登录被拒绝`：根据日志中的服务器原因检查账号、在线设备数或使用时段。
+- `探测不可达`：可能是网络切换、DNS 或超时；后台会继续检查可信登录页并重试，不代表密码错误。
+
+在线时后台通常不重复写成功日志。“设置完成”只表示启动流程完成，不等于认证成功。
+
+### 4. 无线名称、手动检查与卸载
+
+默认只处理 `hfut-wlan` Wi-Fi。有线不受 SSID 限制。若使用其他校园 SSID 或共享路由器，用记事本编辑 `windows/config.psd1` 的 `WifiSsids`，例如 `@("hfut-wlan", "你的校园路由器名称")`。修改后先卸载后台，再重新注册；不必运行 Setup，以免覆盖自定义设置。
+
+在 `windows` 文件夹空白处右键打开终端，按需执行：
+
+```powershell
+# 手动检查一轮，不重新填写账号
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start.ps1
+
+# 取消登录自启动并停止后台，保留账号配置
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Unregister-AutoAuthTask.ps1
+
+# 用现有配置重新注册并启动后台
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Register-AutoAuthTask.ps1
+```
+
+移动或删除文件夹前先卸载。更新版本时先停止旧后台，在新目录重新配置并启动。不要分享 `config.psd1`、日志或本地抓取文件。
+
+### 常见问题
+
+- **认证慢：** Windows 会响应网络地址变化，离线短重试、在线低频检查；网络请求超时仍会增加等待时间。
+- **证书弹窗：** 本脚本使用命令行 curl，不弹出网页证书对话框。若认证网页提示不受信任或名称不匹配，不要为了消除弹窗直接安装未知根证书；先关闭网页并查看后台认证日志。
+- **运行后文件找不到：** 请完整解压，并保留 BAT 与 `windows` 子目录的相对位置。
+
+## 手动安装（macOS / Windows）
 
 ### macOS
 
