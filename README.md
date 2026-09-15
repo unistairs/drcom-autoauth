@@ -1,6 +1,6 @@
-# 校园网自动认证
+https://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauthhttps://github.com/unistairs/drcom-autoauth# 校园网自动认证
 
-用于校园网自动认证，掉线后自动尝试重新登录。支持 Windows 和 macOS，适用于 Dr.COM 认证系统。
+用于合肥工业大学宣城校园网自动认证，掉线后自动尝试重新登录。支持 Windows 和 macOS，适用于 Dr.COM 认证系统。
 
 ## Windows
 
